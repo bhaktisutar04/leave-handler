@@ -1,0 +1,47 @@
+name: Leave Handler
+
+on:
+  schedule:
+    - cron: "30 18 * * *"   # 00:00 IST (midnight)
+    - cron: "30 6 * * *"    # 12:00 IST (noon)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write Google credentials files
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
+
+      - name: Restore processed emails log
+        uses: actions/cache@v4
+        with:
+          path: processed_emails.json
+          key: processed-emails-log
+          restore-keys: processed-emails-log
+
+      - name: Run agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python main.py
+
+      - name: Save processed emails log
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: processed_emails.json
+          key: processed-emails-log-${{ github.run_id }}
