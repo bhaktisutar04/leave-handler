@@ -1,0 +1,376 @@
+An MCP-based AI agent powered by Groq (Llama 3.3-70b). Groq is the brain — it reads leave emails, reasons about conflicts and policy, and decides what to do. Gmail, Calendar, and Google Chat are its MCP tools — the hands it uses to take real actions. Python is just the runtime connecting everything. Deployed free on GitHub Actions.
+
+Full stack — every tool used
+G
+Groq API — free AI brain
+Runs Llama 3.3-70b. Reads emails, reasons, decides what tool to call next. Free tier: 14,400 req/day.
+📧
+Gmail API Free
+MCP Tool 1 — read_emails. MCP Tool 3 — save_draft. Both call Gmail API under the hood.
+📅
+Google Calendar API Free
+MCP Tool 2 — check_calendar. Groq calls this to check if requested dates are clear.
+💬
+Google Chat Webhook Free
+MCP Tool 4 — notify_chat. Groq calls this to post team summaries to your Chat space.
+🐍
+Python 3 Free
+Not the brain anymore. Just executes tools when Groq asks for them, runs the agent loop.
+⚙️
+GitHub Actions Free
+Runs the whole system every Monday 8am IST automatically. No server needed.
+🔐
+Google Cloud Console Free
+One-time setup to get Gmail + Calendar API credentials. Nothing ongoing.
+
+Day 1 — Environment setup (~2 hrs)
+→
+Install Python 3.8+ and VS Code
+Download python.org and code.visualstudio.com. Install the Python extension in VS Code.
+→
+Install all libraries
+pip install groq google-auth google-auth-oauthlib google-api-python-client requests
+→
+Get Groq API key
+Go to console.groq.com → sign up free → API Keys → Create → copy it. Store safely.
+→
+Create project folder structure
+Create leave-handler/ folder with subfolders. Create all empty .py files listed in Files tab.
+
+Day 2 — Google credentials (~1.5 hrs)
+→
+Create Google Cloud project
+console.cloud.google.com → New Project → name it "leave-handler" → Create.
+→
+Enable Gmail API + Calendar API
+APIs & Services → Library → search each → Enable. Do both.
+→
+Create OAuth credentials → download credentials.json
+Credentials → Create → OAuth client ID → Desktop app → Download JSON → rename to credentials.json → put in project folder.
+→
+Add yourself as test user
+OAuth consent screen → Test users → Add your Gmail. Required or Google will block you.
+→
+Create Google Chat space + webhook
+chat.google.com → New Space → "Leave Alerts" → Manage Webhooks → copy URL → paste into config.py.
+
+Day 3 — Build the 4 MCP tools (~3 hrs)
+→
+Write tools.py — read_emails()
+Calls Gmail API. Searches inbox for leave keywords. Returns list of email dicts with sender, subject, body, date.
+→
+Write tools.py — check_calendar()
+Calls Calendar API. Takes start_date and end_date. Returns list of event names and dates found.
+→
+Write tools.py — save_draft()
+Takes to_email, subject, body. Saves to Gmail Drafts. Returns success confirmation.
+→
+Write tools.py — notify_chat()
+Takes message string. POSTs to Google Chat webhook URL. Returns confirmation.
+
+Day 4 — Build the MCP agent loop (~3 hrs)
+→
+Write tool_schemas.py — define 4 tools in JSON
+Each tool needs name, description, parameters in JSON schema format. This is what you send to Groq so it knows what tools exist.
+→
+Write prompts.py — system prompt
+Write the system prompt that tells Groq its role, the leave policy, and how to use the tools. This is your entire business logic in plain English.
+→
+Write agent.py — the MCP loop
+The while True loop: call Groq → check for tool_calls → execute tool → return result → repeat until Groq says done.
+→
+Write main.py — entry point
+Loads config, authenticates Google, starts the agent. This is the file GitHub Actions will run.
+
+Day 5 — Test end to end (~2 hrs)
+→
+Run first time — Google OAuth popup
+python main.py → browser opens → sign in → allow → token.json created. Only happens once.
+→
+Email yourself a fake leave request
+Send yourself an email: "Leave request — Jan 20 to Jan 22, annual leave." Wait 1 min, run script again.
+→
+Watch Groq call tools one by one
+You'll see in the terminal: Groq calls read_emails → gets email → calls check_calendar → calls save_draft → calls notify_chat. That's MCP working.
+→
+Check Gmail Drafts + Google Chat
+Confirm the draft was saved in Gmail. Confirm the summary appeared in your Chat space. Fix any errors.
+
+
+Week 2 — Polish, deploy, showcase (Days 6–10)
+Day 6 — Edge case testing (~2 hrs)
+→
+Test vague email: "need some time off next week"
+Confirm Groq handles it — asks for clarification or flags for manual review. Python would have crashed here.
+→
+Test policy violation: only 2 days notice
+Confirm Groq declines but writes an empathetic reply explaining why. Adjust the system prompt if the response isn't right.
+→
+Test medical reason: "doctor's appointment, emergency"
+Confirm Groq treats this with extra care — flags for human review rather than auto-declining.
+→
+Tune the system prompt based on what you see
+If Groq's replies feel too formal or too casual, edit prompts.py. No code changes needed — just words.
+Day 7 — Deploy on GitHub Actions (~2 hrs)
+→
+Create GitHub repo "leave-handler"
+github.com → New repo → Public (so recruiters can see it) → push all files except credentials.json and token.json.
+→
+Create .gitignore — block sensitive files
+Add credentials.json, token.json, .env, __pycache__/ to .gitignore. Never push these.
+→
+Add 4 GitHub Secrets
+Repo → Settings → Secrets → Actions: GROQ_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_TOKEN, CHAT_WEBHOOK_URL.
+→
+Create .github/workflows/run.yml
+Cron: "30 2 * * MON" (2:30am UTC = 8am IST). Installs dependencies, writes secrets to files, runs python main.py.
+→
+Trigger manually and verify in Actions tab
+Actions → Run workflow → watch logs. Green tick = deployed successfully. Check Gmail Drafts + Chat.
+Day 8 — Write README (~1 hr)
+→
+Write README.md with 5 sections
+1) What it does 2) Architecture diagram 3) MCP tools list 4) Setup instructions 5) Screenshot of it working
+→
+Add a screenshot of the GitHub Actions run log
+Screenshot showing Groq calling tools one by one. This is what makes your README stand out.
+Day 9 — Document and showcase (~1 hr)
+→
+Post on LinkedIn
+"Built an MCP AI agent with Groq + Gmail + Google Calendar. Here's how it works..." Include GitHub link and a short demo video if possible.
+→
+Update your resume
+Add the resume bullet from the Resume tab. Link to your GitHub repo.
+Day 10 — Optional upgrades
+→
+Add a 5th MCP tool: get_team_leaves()
+Check how many people are already on leave on those dates. Groq will factor this into its decision automatically.
+→
+Add logging to Google Sheets
+A 6th tool: log_to_sheet() — writes every decision to a Sheets tracker. Great for HR records.
+
+
+Complete project file structure
+leave-handler/
+Root project folder
+  main.py
+Entry point. Loads config, authenticates, starts agent.
+  agent.py
+The MCP agent loop. Calls Groq, routes tool calls, returns results.
+  tools.py
+4 actual tool functions: read_emails, check_calendar, save_draft, notify_chat.
+  tool_schemas.py
+JSON definitions of the 4 tools — what you send Groq so it knows what's available.
+  prompts.py
+System prompt — your leave policy and agent instructions in plain English.
+  auth.py
+Google OAuth helper — returns authenticated Gmail and Calendar service objects.
+  config.py
+All settings: API keys, manager name, webhook URL. Reads from environment variables.
+  requirements.txt
+groq, google-auth, google-auth-oauthlib, google-api-python-client, requests
+  README.md
+Portfolio page — what it does, architecture, MCP tools, setup steps, screenshot.
+  .gitignore
+Blocks credentials.json, token.json, .env from being pushed to GitHub.
+  credentials.json
+Google OAuth — local only. NEVER push to GitHub.
+  token.json
+Auto-generated auth token — local only. NEVER push to GitHub.
+  .github/
+GitHub Actions config
+    workflows/run.yml
+Cron schedule — runs main.py every Monday 8am IST automatically.
+
+
+config.py — all your settings in one place
+Reads API keys from environment variables so you never hardcode secrets. Change your policy or name here without touching any other file.
+import os
+
+GROQ_API_KEY     = os.environ["GROQ_API_KEY"]
+CHAT_WEBHOOK_URL = os.environ["CHAT_WEBHOOK_URL"]
+MANAGER_NAME     = "Your Name"
+COMPANY_NAME     = "Your Company"
+SCAN_DAYS_BACK   = 7
+LEAVE_POLICY     = {
+    "min_notice_days": 5,
+    "max_days": 10,
+    "blackout_dates": []
+}
+
+prompts.py — your entire business logic in plain English
+This is the most important file. Groq reads this before doing anything. Change policy? Edit this file — no code changes needed anywhere else.
+SYSTEM_PROMPT = """
+You are an HR leave request assistant for {company}.
+
+Your job each run:
+1. Call read_emails to find leave requests (last 7 days)
+2. For each request found, call check_calendar for those dates
+3. Apply leave policy:
+   - Min {min_notice} days notice required
+   - Max {max_days} consecutive days per request
+   - Be extra empathetic for medical or emergency reasons
+   - Flag anything unusual for human review
+4. Call save_draft with a warm, personalized reply
+5. Call notify_chat with a team summary at the end
+
+Always reason out loud before calling any tool.
+Write replies as {manager_name}, not as a bot.
+"""
+
+tool_schemas.py — how you describe tools to Groq
+Groq reads these descriptions to understand what each tool does and what arguments it needs. The description quality directly affects how well Groq uses the tools.
+MCP_TOOLS = [
+  {
+    "type": "function",
+    "function": {
+      "name": "read_emails",
+      "description": "Search Gmail inbox for leave request emails from the past N days. Returns list of emails with sender, subject, body.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "days_back": {"type": "integer", "description": "How many days back to search"}
+        },
+        "required": ["days_back"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "check_calendar",
+      "description": "Check Google Calendar for events between two dates. Use this to detect scheduling conflicts.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "start_date": {"type": "string", "description": "YYYY-MM-DD"},
+          "end_date":   {"type": "string", "description": "YYYY-MM-DD"}
+        },
+        "required": ["start_date", "end_date"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_draft",
+      "description": "Save an email reply as a Gmail Draft. Call this with the full reply you have written.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "to_email": {"type": "string"},
+          "subject":  {"type": "string"},
+          "body":     {"type": "string", "description": "Full email body — write this yourself"}
+        },
+        "required": ["to_email", "subject", "body"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "notify_chat",
+      "description": "Post a message to the team Google Chat space. Use this at the end to summarize what was processed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string", "description": "The message to post"}
+        },
+        "required": ["message"]
+      }
+    }
+  }
+]
+
+agent.py — the MCP loop (the heart of the project)
+This is where MCP happens. Groq decides which tool to call. Python executes it. Result goes back to Groq. Repeats until Groq has no more tool calls.
+import json
+from groq import Groq
+from config import GROQ_API_KEY
+from tool_schemas import MCP_TOOLS
+from prompts import SYSTEM_PROMPT
+from tools import execute_tool
+
+def run_agent():
+    client = Groq(api_key=GROQ_API_KEY)
+    messages = [
+        {"role": "system",  "content": SYSTEM_PROMPT},
+        {"role": "user",    "content": "Process all leave requests now."}
+    ]
+
+    print("Agent starting...\n")
+
+    while True:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            tools=MCP_TOOLS,
+            tool_choice="auto"
+        )
+        msg = response.choices[0].message
+
+        if msg.tool_calls:
+            messages.append(msg)
+            for tc in msg.tool_calls:
+                name   = tc.function.name
+                args   = json.loads(tc.function.arguments)
+                print(f"Groq calling tool: {name}({args})")
+                result = execute_tool(name, args)
+                print(f"Tool result: {result}\n")
+                messages.append({
+                    "role":        "tool",
+                    "tool_call_id": tc.id,
+                    "content":     json.dumps(result)
+                })
+        else:
+            print("Agent finished.\n")
+            print(msg.content)
+            break
+
+GitHub Actions workflow — run.yml
+Create this file at .github/workflows/run.yml in your repo. It runs main.py every Monday at 8am IST (2:30am UTC) automatically, for free, forever.
+name: Leave Request Handler
+
+on:
+  schedule:
+    - cron: "30 2 * * MON"   # 8:00am IST every Monday
+  workflow_dispatch:          # Also allows manual trigger
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write credentials files
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.GOOGLE_TOKEN }}'       > token.json
+
+      - name: Run agent
+        env:
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          CHAT_WEBHOOK_URL:  ${{ secrets.CHAT_WEBHOOK_URL }}
+        run: python main.py
+4 GitHub secrets you need to add
+1
+GROQ_API_KEY
+Your Groq API key from console.groq.com
+2
+GOOGLE_CREDENTIALS
+Paste the entire content of your credentials.json file
+3
+GOOGLE_TOKEN
+Paste the entire content of your token.json file (generated after first local run)
+4
+CHAT_WEBHOOK_URL
+Your Google Chat webhook URL from your Leave Alerts space
+
+
