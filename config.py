@@ -10,9 +10,9 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 
 # --- Manager / company info ---
-MANAGER_NAME  = "Your Name"
-COMPANY_NAME  = "Your Company"
-TEAM_NAME     = "Your Team"
+MANAGER_NAME  = "Shanti Priya"
+COMPANY_NAME  = "ABC Company"
+TEAM_NAME     = "HR Team"
 
 # --- How far back to scan Gmail ---
 SCAN_DAYS_BACK = 1
