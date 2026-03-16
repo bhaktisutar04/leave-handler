@@ -18,8 +18,8 @@ MCP_TOOLS = [
                 "properties": {
                     "days_back": {
                         "type": "integer",
-                        "description": "How many days back to search. Use 7 for a weekly run.",
-                        "default": 7,
+                        "description": "How many days back to search.  Use 1 for a daily run.",
+                        "default": 1,
                     }
                 },
                 "required": [],
