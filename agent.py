@@ -5,14 +5,14 @@ Key design: each email is processed in its own fresh conversation.
 This keeps context short and prevents Groq from generating malformed tool calls.
 
 Flow:
-  1. One Groq call to read all emails
-  2. For each email — fresh conversation → check calendar → save draft → add event
-  3. One final Groq call to post Slack summary
+  1. Read all new emails directly (no Groq needed for this)
+  2. For each email — fresh Groq conversation → check calendar → save draft → add event
+  3. Post Slack summary only if emails were processed
 """
 
 import json
 from groq import Groq, BadRequestError
-from config import GROQ_API_KEY
+from config import GROQ_API_KEY, SCAN_DAYS_BACK
 from tool_schemas import MCP_TOOLS
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
@@ -27,7 +27,7 @@ def run_agent() -> str:
 
     # ── Step 1: Read all new emails ──
     print("\n[Step 1] Reading new leave request emails...")
-    email_result = execute_tool("read_emails", {"days_back": 7})
+    email_result = execute_tool("read_emails", {"days_back": SCAN_DAYS_BACK})
 
     if email_result.get("error"):
         print(f"  ✗ Error reading emails: {email_result['error']}")
@@ -37,11 +37,10 @@ def run_agent() -> str:
     skipped = email_result.get("skipped", 0)
     print(f"  Found {len(emails)} new email(s), skipped {skipped} already processed")
 
+    # ── If no new emails — silently exit, no Slack noise ──
     if not emails:
-        msg = "No new leave requests this week."
-        execute_tool("notify_slack", {"message": msg})
-        print(f"  Notified Slack: {msg}")
-        return msg
+        print(f"  No new emails — nothing to do.")
+        return "No new leave requests."
 
     # ── Step 2: Process each email in its own fresh conversation ──
     results = []
@@ -72,7 +71,6 @@ def _process_single_email(email: dict) -> dict:
     """
     client = Groq(api_key=GROQ_API_KEY)
 
-    # Fresh conversation for each email — keeps context short
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -151,7 +149,6 @@ def _process_single_email(email: dict) -> dict:
                 })
 
         else:
-            # Groq finished — extract outcome
             final = msg.content or ""
             print(f"\n  Groq outcome: {final[:200]}")
 
@@ -196,7 +193,7 @@ def _build_summary(results: list) -> str:
             lines.append(f"  • {r['sender']} — {r['subject']}")
 
     if flagged:
-        lines.append(f"\n⚠️ Needs review ({len(flagged)}):") 
+        lines.append(f"\n⚠️ Needs review ({len(flagged)}):")
         for r in flagged:
             lines.append(f"  • {r['sender']} — {r['subject']}")
 
