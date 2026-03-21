@@ -36,19 +36,19 @@ LEAVE_TAG = "[LEAVE]"   # All approved leave events are prefixed with this
 LOG_FILE = "processed_emails.json"
 
 def _load_processed_ids() -> set:
-    if not os.path.exists(LOG_FILE):
-        return set()
+    if not os.path.exists(LOG_FILE):    # If the file doesn't exist yet...
+        return set()    # ...return an empty set (blank checklist)
     try:
         with open(LOG_FILE) as f:
-            return set(json.load(f))
+            return set(json.load(f))    # Read the file and return the IDs
     except Exception:
-        return set()
+        return set()    # If anything goes wrong, return empty set
 
 def _save_processed_id(email_id: str) -> None:
-    ids = _load_processed_ids()
-    ids.add(email_id)
+    ids = _load_processed_ids()     # Load what's already in the file
+    ids.add(email_id)       # Add the new ID to the set
     with open(LOG_FILE, "w") as f:
-        json.dump(list(ids), f, indent=2)
+        json.dump(list(ids), f, indent=2)      # Save everything back to the file
 
 
 # ─────────────────────────────────────────────
@@ -60,7 +60,7 @@ _calendar = None
 
 def _get_services():
     global _gmail, _calendar
-    if _gmail is None or _calendar is None:
+    if _gmail is None or _calendar is None:     #Only connect to Google if we haven't already
         _gmail, _calendar = get_google_services()
     return _gmail, _calendar
 
@@ -92,9 +92,9 @@ def read_emails(days_back: int = SCAN_DAYS_BACK) -> dict[str, Any]:
         skipped = 0
 
         for msg in messages:
-            if msg["id"] in processed_ids:
+            if msg["id"] in processed_ids:  # already handled?
                 skipped += 1
-                continue
+                continue    # jump to next email, skip this one
 
             detail  = gmail.users().messages().get(userId="me", id=msg["id"], format="full").execute()
             headers = {h["name"]: h["value"] for h in detail["payload"]["headers"]}

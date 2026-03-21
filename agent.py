@@ -19,6 +19,10 @@ from tools import execute_tool
 
 MAX_STEPS = 20
 
+# Tools Groq can use when processing a single email
+# read_emails and notify_slack are handled by Python directly — not by Groq
+EMAIL_TOOLS = [t for t in MCP_TOOLS if t["function"]["name"] not in ("read_emails", "notify_slack")]
+
 
 def run_agent() -> str:
     print("\n" + "═" * 55)
@@ -101,7 +105,7 @@ def _process_single_email(email: dict) -> dict:
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
-                tools=MCP_TOOLS,
+                tools=EMAIL_TOOLS,
                 tool_choice="auto",
                 max_tokens=4096,
             )

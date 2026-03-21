@@ -9,19 +9,14 @@ MCP_TOOLS = [
         "function": {
             "name": "read_emails",
             "description": (
-                "Search Gmail for NEW leave request emails from the past N days. "
+                "Search Gmail for NEW leave request emails. "
                 "Always call this first. Already-processed emails are skipped automatically. "
-                "Returns emails with sender, subject, body, date, and email_id."
+                "Returns emails with sender, subject, body, date, and email_id. "
+                "Call this with no arguments."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "days_back": {
-                        "type": "integer",
-                        "description": "How many days back to search.  Use 1 for a daily run.",
-                        "default": 1,
-                    }
-                },
+                "properties": {},
                 "required": [],
             },
         },

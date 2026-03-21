@@ -40,4 +40,5 @@ LEAVE_KEYWORDS = [
     "day off",
     "absence request",
     "emergency leave",
+    "request for leave",
 ]
