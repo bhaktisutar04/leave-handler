@@ -15,7 +15,7 @@ COMPANY_NAME  = "ABC Company"
 TEAM_NAME     = "HR Team"
 
 # --- How far back to scan Gmail ---
-SCAN_DAYS_BACK = 1
+SCAN_DAYS_BACK = int(os.environ.get("SCAN_DAYS_BACK", "1"))
 
 # --- Leave policy rules (edit these to match your company) ---
 LEAVE_POLICY = {

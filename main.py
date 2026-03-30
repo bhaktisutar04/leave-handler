@@ -9,6 +9,7 @@ Usage:
 
 import sys
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load .env file so all environment variables are available
@@ -25,38 +26,107 @@ def check_config() -> bool:
     """
     ok = True
 
+    print("Validating configuration...")
+    print()
+
+    # Check Groq API Key
     if not GROQ_API_KEY:
-        print("ERROR: GROQ_API_KEY is not set in your .env file.")
-        print("       Get your key at console.groq.com → API Keys")
+        print("✗ ERROR: GROQ_API_KEY is not set in your .env file.")
+        print("  Get your key at console.groq.com → API Keys")
         ok = False
+    else:
+        print(f"✓ GROQ_API_KEY: {GROQ_API_KEY[:20]}...")
 
+    # Check Slack Webhook
     if not SLACK_WEBHOOK_URL:
-        print("ERROR: SLACK_WEBHOOK_URL is not set in your .env file.")
-        print("       Get it from api.slack.com → Your App → Incoming Webhooks")
+        print("✗ ERROR: SLACK_WEBHOOK_URL is not set in your .env file.")
+        print("  Get it from api.slack.com → Your App → Incoming Webhooks")
         ok = False
+    else:
+        print(f"✓ SLACK_WEBHOOK_URL: {SLACK_WEBHOOK_URL[:40]}...")
 
+    # Check Google credentials
     if not os.path.exists("credentials.json"):
-        print("ERROR: credentials.json not found in this folder.")
-        print("       Download it from Google Cloud Console → APIs & Services → Credentials")
+        print("✗ ERROR: credentials.json not found in this folder.")
+        print("  Download it from Google Cloud Console → APIs & Services → Credentials")
         ok = False
+    else:
+        print("✓ credentials.json: Found")
 
+    # Check Google token (optional, will be created if missing)
+    if not os.path.exists("token.json"):
+        print("⚠ WARNING: token.json not found.")
+        print("  This is normal for first run - OAuth flow will create it.")
+        print("  If running in GitHub Actions, ensure GOOGLE_TOKEN secret is set.")
+    else:
+        print("✓ token.json: Found")
+
+    # Check processed emails log (optional, will be created if missing)
+    if not os.path.exists("processed_emails.json"):
+        print("⚠ INFO: processed_emails.json not found.")
+        print("  This is normal for first run - will be created automatically.")
+    else:
+        print("✓ processed_emails.json: Found")
+
+    print()
     return ok
 
 
 def main():
-    print("Leave Handler — starting up")
-    print(f"Working directory: {os.getcwd()}\n")
+    print("=" * 70)
+    print("  LEAVE HANDLER AGENT")
+    print("=" * 70)
+    print(f"  Current time (UTC): {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Working directory: {os.getcwd()}")
+    print("=" * 70)
+    print()
 
     # Validate config before doing anything
     if not check_config():
-        print("\nFix the errors above and try again.")
+        print()
+        print("=" * 70)
+        print("  CONFIGURATION ERRORS FOUND")
+        print("=" * 70)
+        print("  Fix the errors above and try again.")
+        print("=" * 70)
         sys.exit(1)
 
-    print("Config OK — starting agent...\n")
+    print("=" * 70)
+    print("  Configuration OK — starting agent")
+    print("=" * 70)
+    print()
 
     # Run the MCP agent loop
-    from agent import run_agent
-    run_agent()
+    try:
+        from agent import run_agent
+        result = run_agent()
+        
+        print()
+        print("=" * 70)
+        print("  AGENT COMPLETED SUCCESSFULLY")
+        print("=" * 70)
+        print()
+        
+        sys.exit(0)
+        
+    except KeyboardInterrupt:
+        print()
+        print("=" * 70)
+        print("  AGENT INTERRUPTED BY USER")
+        print("=" * 70)
+        sys.exit(130)
+        
+    except Exception as e:
+        print()
+        print("=" * 70)
+        print("  AGENT FAILED WITH ERROR")
+        print("=" * 70)
+        print(f"  Error: {e}")
+        print()
+        import traceback
+        traceback.print_exc()
+        print("=" * 70)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

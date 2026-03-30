@@ -4,11 +4,12 @@ on:
   schedule:
     - cron: "30 18 * * *"   # 00:00 IST (midnight)
     - cron: "30 6 * * *"    # 12:00 IST (noon)
-  workflow_dispatch:
+  workflow_dispatch:        # Manual trigger button
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,27 +22,162 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Write Google credentials files
+      # ── Restore processed emails log from previous run ──
+      - name: Restore processed emails log
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: processed-emails-log
+          path: .
+
+      # ── Restore Google token from previous run (in case it was refreshed) ──
+      - name: Restore Google token
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: google-token
+          path: .
+
+      # ── Write Google credentials ──
+      - name: Write Google credentials
         run: |
           echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
-          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
 
-      - name: Restore processed emails log
-        uses: actions/cache@v4
-        with:
-          path: processed_emails.json
-          key: processed-emails-log
-          restore-keys: processed-emails-log
+          # Only write token.json if it wasn't restored from artifact
+          if [ ! -f token.json ]; then
+            echo "No token.json found in artifacts, using secret"
+            echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
+          else
+            echo "Using token.json from previous run (may have been refreshed)"
+          fi
 
+          # Verify files exist
+          ls -lh credentials.json token.json || echo "Warning: credential files missing"
+
+      # ── Warn if Google token looks stale or missing a refresh_token ──
+      # Detects when the artifact has expired and the workflow is falling
+      # back to the GOOGLE_TOKEN secret, which may itself be expired. Posts a
+      # Slack warning so a human can re-run the OAuth flow before it fully breaks.
+      - name: Check Google token health
+        run: |
+          if [ ! -f token.json ]; then
+            echo "WARN: token.json is completely missing after restore attempts"
+            TOKEN_STATUS="missing"
+          else
+            HAS_REFRESH=$(python3 - <<'EOF'
+          import json
+          try:
+              d = json.load(open('token.json'))
+              print('ok' if d.get('refresh_token') else 'no_refresh_token')
+          except Exception:
+              print('invalid')
+          EOF
+          )
+            echo "Token health check: $HAS_REFRESH"
+            TOKEN_STATUS=$HAS_REFRESH
+          fi
+
+          if [ "$TOKEN_STATUS" != "ok" ]; then
+            echo "⚠ Token issue detected: $TOKEN_STATUS"
+            if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+              curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+                -H 'Content-type: application/json' \
+                --data "{\"text\": \"⚠️ *Leave Handler — Token Warning*\nGoogle token status: \`$TOKEN_STATUS\`\nThe OAuth token may be expired or missing. Please re-run the OAuth flow locally and update the \`GOOGLE_TOKEN\` secret before the next scheduled run.\"}" \
+                || echo "Failed to post Slack warning"
+            fi
+          else
+            echo "✓ Token looks healthy"
+          fi
+
+      # ── Check if processed_emails.json exists ──
+      - name: Check processed emails log
+        run: |
+          if [ -f processed_emails.json ]; then
+            echo "Found processed_emails.json from previous run:"
+            cat processed_emails.json | head -20
+            EMAIL_COUNT=$(cat processed_emails.json | grep -o '"' | wc -l)
+            echo "Contains approximately $((EMAIL_COUNT / 2)) processed email IDs"
+          else
+            echo "No processed_emails.json found - first run or artifact expired"
+            echo "[]" > processed_emails.json
+          fi
+
+      # ── Run the agent with full logging ──
+      # FIX: SCAN_DAYS_BACK overridden to 2 days here as a safety buffer.
+      # The twice-daily schedule with 1-day lookback creates a gap risk: if the
+      # midnight run fails silently, emails from 25+ hours ago are permanently
+      # missed on the next noon run. Setting it to 2 days prevents this.
+      # The processed_emails.json deduplication ensures no double-processing.
       - name: Run agent
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: python main.py
+          SCAN_DAYS_BACK: "2"
+        run: |
+          echo "Starting Leave Handler agent..."
+          echo "Working directory: $(pwd)"
+          echo "Current time (UTC): $(date -u)"
+          echo "Current time (IST): $(TZ=Asia/Kolkata date)"
+          echo "Scan window: $SCAN_DAYS_BACK days back"
+          echo ""
 
+          python main.py 2>&1 | tee agent-log.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          echo ""
+          echo "Agent finished with exit code: $EXIT_CODE"
+
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "ERROR: Agent failed!"
+            exit $EXIT_CODE
+          fi
+
+      # ── Save processed emails log for next run ──
       - name: Save processed emails log
-        uses: actions/cache/save@v4
+        uses: actions/upload-artifact@v4
         if: always()
         with:
+          name: processed-emails-log
           path: processed_emails.json
-          key: processed-emails-log-${{ github.run_id }}
+          retention-days: 90
+          overwrite: true
+
+      # ── Save refreshed Google token for next run ──
+      - name: Save Google token
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: google-token
+          path: token.json
+          retention-days: 90
+          overwrite: true
+
+      # ── Upload logs for debugging ──
+      - name: Upload agent logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-run-${{ github.run_number }}
+          path: |
+            agent-log.txt
+            processed_emails.json
+          retention-days: 30
+
+      # ── Summary ──
+      - name: Show summary
+        if: always()
+        run: |
+          echo "═══════════════════════════════════════"
+          echo "  Workflow Summary"
+          echo "═══════════════════════════════════════"
+
+          if [ -f processed_emails.json ]; then
+            EMAIL_COUNT=$(cat processed_emails.json | grep -o '"' | wc -l)
+            echo "Total processed emails: $((EMAIL_COUNT / 2))"
+          fi
+
+          if [ -f agent-log.txt ]; then
+            echo ""
+            echo "Last 20 lines of agent log:"
+            tail -20 agent-log.txt
+          fi

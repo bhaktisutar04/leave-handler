@@ -1,7 +1,40 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Google OAuth credentials - NEVER commit these!
 credentials.json
 token.json
-.env
-__pycache__/
-*.pyc
+
+# Processed emails log - managed by GitHub Actions artifacts
 processed_emails.json
-venv/ 
+
+# Agent logs
+agent-log.txt
+*.log
+
+# Environment variables - NEVER commit this!
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

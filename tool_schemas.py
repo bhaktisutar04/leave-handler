@@ -1,6 +1,10 @@
 """
 tool_schemas.py — JSON schema definitions of the 5 MCP tools.
 Sent to Groq so it knows what tools exist and when to call them.
+
+FIXES:
+  - check_calendar description updated to document is_blackout_date and
+    blackout_dates_hit response fields so Groq treats them as hard decline signals
 """
 
 MCP_TOOLS = [
@@ -10,9 +14,9 @@ MCP_TOOLS = [
             "name": "read_emails",
             "description": (
                 "Search Gmail for NEW leave request emails. "
-                "Always call this first. Already-processed emails are skipped automatically. "
+                "Already-processed emails are skipped automatically. "
                 "Returns emails with sender, subject, body, date, and email_id. "
-                "Call this with no arguments."
+                "NOTE: This is called by Python directly — you do not need to call it."
             ),
             "parameters": {
                 "type": "object",
@@ -26,10 +30,17 @@ MCP_TOOLS = [
         "function": {
             "name": "check_calendar",
             "description": (
-                "Check Google Calendar for the requested leave dates. Does two things: "
-                "(1) finds any existing events (conflicts), "
-                "(2) counts how many team members are already on approved leave those days by looking for [LEAVE] events. "
-                "If team_limit_reached is True, you MUST decline — the team cannot have more people off. "
+                "Check Google Calendar for the requested leave dates. Does three things: "
+                "(1) counts team members already on approved leave (leave_events / people_on_leave), "
+                "(2) finds real scheduling conflicts — meetings, holidays, etc. (non_leave_events / has_conflict), "
+                "(3) checks if any requested date is a company blackout date. "
+                "IMPORTANT: other team members' [LEAVE] events are NOT a conflict reason — "
+                "they only contribute to the people_on_leave headcount. "
+                "Do NOT decline a request just because has_conflict is True or non_leave_events is non-empty — "
+                "those are informational only. "
+                "Hard decline signals: "
+                "- team_limit_reached=True → too many people already off. "
+                "- is_blackout_date=True → the date is a company blackout day. "
                 "Always call this before deciding to approve or decline."
             ),
             "parameters": {
@@ -71,11 +82,13 @@ MCP_TOOLS = [
                     },
                     "body": {
                         "type": "string",
+                        "maxLength": 1000,
                         "description": (
-                            "Full email body. Write this yourself — personalized and human. "
+                            "Full email body. Keep it concise — 3 to 5 sentences maximum. "
                             "Approvals: confirm dates, wish them well. "
-                            "Declines: explain reason clearly and kindly. "
-                            "Sign off with the manager's name."
+                            "Declines: explain reason clearly and kindly in 2-3 sentences. "
+                            "Sign off with the manager's name. "
+                            "Do NOT include your reasoning or policy analysis in the body."
                         ),
                     },
                     "email_id": {
@@ -124,7 +137,8 @@ MCP_TOOLS = [
             "name": "notify_slack",
             "description": (
                 "Post a summary to the #leave-alerts Slack channel. "
-                "Call this exactly once at the very end after all requests are processed. "
+                "NOTE: This is called by Python directly after all emails are processed — "
+                "you do not need to call it. "
                 "Include: total processed, who was approved, who was declined, and why."
             ),
             "parameters": {
