@@ -1,4 +1,3 @@
-
 """
 agent.py — The MCP agent loop.
 
@@ -7,30 +6,38 @@ This keeps context short and prevents Groq from generating malformed tool calls.
 
 Flow:
   1. Read all new emails directly (no Groq needed for this)
-  2. For each email — fresh Groq conversation → check calendar → save draft → add event
+  2. For each email — mark as processed immediately, then run Groq conversation
   3. Post Slack summary only if emails were processed
-
-FIXES:
-  - Outcome detection checks the first line only (prevents mid-string false matches)
-  - max_tokens reduced 4096 → 1024 to prevent Groq reasoning loops in tool args
-  - BadRequestError tool_use_failed now retries with a correction nudge instead of
-    aborting the whole email (fixes malformed add_calendar_event calls)
-  - Draft body capped at 3-5 sentences in the user prompt instruction
 """
 
 import json
-from groq import Groq, BadRequestError
+import re
+import time
+from groq import Groq
+from groq import BadRequestError
+try:
+    from groq import RateLimitError
+except ImportError:
+    from groq import APIStatusError as RateLimitError
+
 from config import GROQ_API_KEY, SCAN_DAYS_BACK
 from tool_schemas import MCP_TOOLS
 from prompts import SYSTEM_PROMPT
-from tools import execute_tool
+from tools import execute_tool, save_processed_id
 
-MAX_STEPS = 20
+MAX_STEPS               = 20
 MAX_BAD_REQUEST_RETRIES = 2
+MAX_RATE_LIMIT_RETRIES  = 2
 
-# Tools Groq can use when processing a single email.
-# read_emails and notify_slack are handled by Python directly — not by Groq.
 EMAIL_TOOLS = [t for t in MCP_TOOLS if t["function"]["name"] not in ("read_emails", "notify_slack")]
+
+# Words in a draft body that signal a decline — used to block
+# add_calendar_event being called after a decline draft is saved
+DECLINE_SIGNALS = [
+    "decline", "declined", "cannot approve", "unable to approve",
+    "not able to approve", "team limit", "team is at capacity",
+    "blackout", "insufficient notice", "not approved", "regret",
+]
 
 
 def run_agent() -> str:
@@ -38,7 +45,6 @@ def run_agent() -> str:
     print("  Leave Handler Agent — starting run")
     print("=" * 55)
 
-    # ── Step 1: Read all new emails ──
     print("\n[Step 1] Reading new leave request emails...")
     email_result = execute_tool("read_emails", {"days_back": SCAN_DAYS_BACK})
 
@@ -54,7 +60,6 @@ def run_agent() -> str:
         print("  No new emails — nothing to do.")
         return "No new leave requests."
 
-    # ── Step 2: Process each email in its own fresh conversation ──
     results = []
     for i, email in enumerate(emails, 1):
         print(f"\n{'-' * 55}")
@@ -63,7 +68,15 @@ def run_agent() -> str:
         outcome = _process_single_email(email)
         results.append(outcome)
 
-    # ── Step 3: Post Slack summary ──
+        # TPD exhausted — stop, remaining emails retry next run
+        if outcome.get("abort_run"):
+            remaining = emails[i:]
+            if remaining:
+                print(f"\n  Aborting — {len(remaining)} email(s) will retry next run:")
+                for e in remaining:
+                    print(f"    • {e['subject']}")
+            break
+
     print("\n[Final] Posting summary to Slack...")
     summary = _build_summary(results)
     execute_tool("notify_slack", {"message": summary})
@@ -79,8 +92,14 @@ def run_agent() -> str:
 def _process_single_email(email: dict) -> dict:
     """
     Processes one leave request email in a fresh Groq conversation.
-    Returns a dict describing what happened (approved/declined/flagged).
+
+    Safeguard: tracks whether a decline draft was saved, and blocks
+    add_calendar_event from being called afterwards — even if Groq
+    hallucinates the call after saving a decline draft.
     """
+    print(f"  Marking email {email['email_id'][:8]}... as processed upfront")
+    save_processed_id(email["email_id"])
+
     client = Groq(api_key=GROQ_API_KEY)
 
     messages = [
@@ -106,8 +125,10 @@ def _process_single_email(email: dict) -> dict:
         },
     ]
 
-    step = 0
+    step                = 0
     bad_request_retries = 0
+    rate_limit_retries  = 0
+    draft_was_decline   = False   # tracks whether a decline draft was saved
 
     while step < MAX_STEPS:
         step += 1
@@ -118,37 +139,63 @@ def _process_single_email(email: dict) -> dict:
                 messages=messages,
                 tools=EMAIL_TOOLS,
                 tool_choice="auto",
-                # Reduced from 4096 to 1024 to prevent Groq from entering
-                # multi-paragraph reasoning loops inside tool call arguments.
-                # 1024 tokens is sufficient for any well-formed tool call or verdict.
                 max_tokens=1024,
             )
-            bad_request_retries = 0  # reset on any successful API response
+            bad_request_retries = 0
 
-        except BadRequestError as e:
+        except (RateLimitError, Exception) as e:
             error_str = str(e)
-            # tool_use_failed = Groq produced malformed tool call syntax like
-            # '<function=add_calendar_event[]{...}>'. Inject a correction nudge
-            # and retry — this recovers cleanly on the next attempt.
-            if "tool_use_failed" in error_str and bad_request_retries < MAX_BAD_REQUEST_RETRIES:
-                bad_request_retries += 1
-                print(f"  ⚠ Groq malformed tool call on step {step} — retrying ({bad_request_retries}/{MAX_BAD_REQUEST_RETRIES})...")
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Your last tool call was malformed and could not be parsed. "
-                        "Please call the correct tool again using valid JSON arguments only. "
-                        "Do not include any wrapper syntax, extra text, or preamble — "
-                        "just invoke the tool directly with the correct parameters."
-                    ),
-                })
-                step -= 1  # don't charge this retry against MAX_STEPS
-                continue
 
-            print(f"  ⚠ Groq BadRequestError on step {step}: {e}")
-            break
+            is_rate_limit = (
+                "429" in error_str
+                or "rate_limit" in error_str.lower()
+                or "rate limit" in error_str.lower()
+                or (hasattr(e, "status_code") and getattr(e, "status_code", 0) == 429)
+            )
 
-        except Exception as e:
+            if is_rate_limit:
+                is_tpd = "tokens per day" in error_str.lower() or "tpd" in error_str.lower()
+                if is_tpd:
+                    print(f"  ✗ Daily token quota (TPD) exhausted — aborting run.")
+                    print(f"  ↩ Un-marking {email['email_id'][:8]}... so it retries next run")
+                    _unmark_processed_id(email["email_id"])
+                    return {
+                        "email_id":  email["email_id"],
+                        "sender":    email["sender"],
+                        "subject":   email["subject"],
+                        "outcome":   "ERROR",
+                        "detail":    "Daily Groq token quota exhausted. Will retry next run.",
+                        "abort_run": True,
+                    }
+
+                wait_seconds = _parse_retry_after(error_str)
+                if rate_limit_retries < MAX_RATE_LIMIT_RETRIES:
+                    rate_limit_retries += 1
+                    print(f"  ⏳ Rate limit on step {step} — waiting {wait_seconds}s ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})...")
+                    time.sleep(wait_seconds)
+                    step -= 1
+                    continue
+                print(f"  ✗ Per-minute rate limit exceeded after {MAX_RATE_LIMIT_RETRIES} retries.")
+                break
+
+            if isinstance(e, BadRequestError) and "tool_use_failed" in error_str:
+                if bad_request_retries < MAX_BAD_REQUEST_RETRIES:
+                    bad_request_retries += 1
+                    print(f"  ⚠ Groq malformed tool call on step {step} — retrying ({bad_request_retries}/{MAX_BAD_REQUEST_RETRIES})...")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your last tool call was malformed and could not be parsed. "
+                            "Please call the correct tool again using valid JSON arguments only. "
+                            "Do not include any wrapper syntax, extra text, or preamble — "
+                            "just invoke the tool directly with the correct parameters."
+                        ),
+                    })
+                    step -= 1
+                    continue
+                print(f"  ⚠ Groq BadRequestError on step {step}: {e}")
+                break
+
             print(f"  ✗ Unexpected error on step {step}: {e}")
             break
 
@@ -178,6 +225,28 @@ def _process_single_email(email: dict) -> dict:
                 except json.JSONDecodeError:
                     tool_args = {}
 
+                # ── Safeguard: detect if this draft is a decline ──
+                if tool_name == "save_draft":
+                    body_lower = tool_args.get("body", "").lower()
+                    if any(signal in body_lower for signal in DECLINE_SIGNALS):
+                        draft_was_decline = True
+                        print(f"  ℹ Draft body contains decline language — blocking any future add_calendar_event call")
+
+                # ── Safeguard: block add_calendar_event after a decline draft ──
+                if tool_name == "add_calendar_event" and draft_was_decline:
+                    print(f"  🚫 BLOCKED add_calendar_event — a decline draft was already saved for this email")
+                    fake_result = {
+                        "success": False,
+                        "error": "Blocked: cannot add calendar event after a decline draft was saved.",
+                    }
+                    _print_result(tool_name, fake_result)
+                    messages.append({
+                        "role":         "tool",
+                        "tool_call_id": tc.id,
+                        "content":      json.dumps(fake_result),
+                    })
+                    continue
+
                 print(f"\n  -> {tool_name}({json.dumps(tool_args)})")
                 tool_result = execute_tool(tool_name, tool_args)
                 _print_result(tool_name, tool_result)
@@ -205,16 +274,40 @@ def _process_single_email(email: dict) -> dict:
         "sender":   email["sender"],
         "subject":  email["subject"],
         "outcome":  "ERROR",
-        "detail":   "Processing failed due to repeated Groq errors.",
+        "detail":   "Processing failed — see agent log for details.",
     }
 
 
+def _parse_retry_after(error_str: str) -> int:
+    phrase = re.search(r'try again in (.+?)(?:\.|$)', error_str, re.IGNORECASE)
+    if phrase:
+        chunk = phrase.group(1)
+        m = re.search(r'(\d+)m(\d+(?:\.\d+)?)s', chunk)
+        if m:
+            return int(int(m.group(1)) * 60 + float(m.group(2))) + 5
+        m = re.search(r'(\d+(?:\.\d+)?)s', chunk)
+        if m:
+            return int(float(m.group(1))) + 5
+    return 65
+
+
+def _unmark_processed_id(email_id: str) -> None:
+    from tools import LOG_FILE
+    import os
+    if not os.path.exists(LOG_FILE):
+        return
+    try:
+        with open(LOG_FILE) as f:
+            ids = set(json.load(f))
+        ids.discard(email_id)
+        with open(LOG_FILE, "w") as f:
+            json.dump(sorted(list(ids)), f, indent=2)
+        print(f"  ✓ Removed {email_id[:8]}... from processed log")
+    except Exception as e:
+        print(f"  ⚠ Could not un-mark email: {e}")
+
+
 def _parse_outcome(final: str) -> str:
-    """
-    Safely extracts APPROVED / DECLINED / FLAGGED from Groq's final message.
-    Checks the first non-empty line only to avoid mid-string false matches.
-    Falls back to FLAGGED if no clear signal is found.
-    """
     for line in final.strip().splitlines():
         stripped = line.strip().upper()
         if not stripped:
@@ -225,9 +318,7 @@ def _parse_outcome(final: str) -> str:
             return "DECLINED"
         if stripped.startswith("FLAGGED"):
             return "FLAGGED"
-        break  # only check the first non-empty line
-
-    # Fallback: first word of any line
+        break
     for line in final.strip().splitlines():
         word = line.strip().split()[0].upper().rstrip(":.!,") if line.strip() else ""
         if word == "APPROVED":
@@ -236,18 +327,17 @@ def _parse_outcome(final: str) -> str:
             return "DECLINED"
         if word == "FLAGGED":
             return "FLAGGED"
-
-    print("  ⚠ Could not determine outcome from Groq response — marking as FLAGGED")
+    print("  ⚠ Could not determine outcome — marking as FLAGGED")
     return "FLAGGED"
 
 
 def _build_summary(results: list) -> str:
-    """Builds a concise Slack summary from all processed emails."""
-    total    = len(results)
-    approved = [r for r in results if r["outcome"] == "APPROVED"]
-    declined = [r for r in results if r["outcome"] == "DECLINED"]
-    flagged  = [r for r in results if r["outcome"] == "FLAGGED"]
-    errors   = [r for r in results if r["outcome"] == "ERROR"]
+    display  = [r for r in results if not r.get("abort_run")]
+    total    = len(display)
+    approved = [r for r in display if r["outcome"] == "APPROVED"]
+    declined = [r for r in display if r["outcome"] == "DECLINED"]
+    flagged  = [r for r in display if r["outcome"] == "FLAGGED"]
+    errors   = [r for r in display if r["outcome"] == "ERROR"]
 
     lines = [f"*Leave Request Summary — {total} request(s) processed*"]
 
@@ -264,9 +354,15 @@ def _build_summary(results: list) -> str:
         for r in flagged:
             lines.append(f"  • {r['sender']} — {r['subject']}")
     if errors:
-        lines.append(f"\n🔴 Errors ({len(errors)}):")
+        lines.append(f"\n🔴 Errors — manual review needed ({len(errors)}):")
         for r in errors:
             lines.append(f"  • {r['sender']} — {r['subject']}")
+            lines.append(f"    ↳ {r['detail']}")
+
+    aborted = [r for r in results if r.get("abort_run")]
+    if aborted:
+        lines.append(f"\n⏹ Run aborted — daily Groq token quota exhausted.")
+        lines.append(f"  Remaining emails will retry on next scheduled run.")
 
     return "\n".join(lines)
 
